@@ -1,4 +1,4 @@
-## About host3r
+## HOST3R
 
 
 <p align="center">
