@@ -16,7 +16,7 @@ git clone https://github.com/rbcafe/host3r
 
 ## Recommended Python Version:
 
-The recommended python version to use is 2.7.15 and 3.7.3
+The recommended python version to use is 2.7.15 and 3.7.3.
 
 ## Dependencies:
 
