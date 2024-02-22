@@ -1,7 +1,7 @@
 title: Host3r
 description: HOST3R is a python tool that is designed to enumerate subdomains of a specific domain to ban.
 google_analytics: 
-show_downloads: true
+show_downloads: false
 theme: jekyll-theme-tactile
 
 gems:
