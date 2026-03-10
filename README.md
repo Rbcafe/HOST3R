@@ -12,18 +12,22 @@ host3r is a python tool that is designed to enumerate the subdomains of a specif
 
 ```
 git clone https://github.com/rbcafe/host3r
+cd host3r
+pip install -r requirements.txt
 ```
 
-## Recommended Python Version:
+## Python Version
 
-The recommended python version to use is 2.7.15 and 3.7.3.
+HOST3R now targets Python 3 only.
 
-## Dependencies:
+Recommended minimum version: `Python >= 3.10`
 
-argparse : dnspython : requests
+## Dependencies
+
+`dnspython` and `requests`
 
 ```
-pip install argparse dnspython requests
+pip install -r requirements.txt
 ```
 
 ## Usage
@@ -33,8 +37,6 @@ Short Form    | Long Form     | Description
 -h            | --help        | show the help message and exit
 -d            | --domain      | Domain name to enumerate subdomains of
 -o            | --output      | Save the results to a text file
--v            | --verbose     | Enable the verbosity
--e            | --exception   | Enable the exceptions notices
 -6            | --ipv6        | Save subdomains with ::1 (ipv6)
 
 ### Examples
@@ -47,21 +49,13 @@ Short Form    | Long Form     | Description
 
 ``python host3r.py -d example.com``
 
-* To enumerate subdomains of a specific domain to ban and show verbosity :
+* To enumerate subdomains of a specific domain and export the generated hosts entries :
 
-``python host3r.py -d example.com -v``
+``python host3r.py -d example.com -o /usr/local/ban.txt``
 
-* To enumerate subdomains of a specific domain to ban, show verbosity and export :
+* To enumerate subdomains of a specific domain, export them, and include IPv6 loopback entries :
 
-``python host3r.py -d example.com -v -o /usr/local/ban.txt``
-
-* To enumerate subdomains of a specific domain to ban, show verbosity, export and add the ::1 (ipv6) :
-
-``python host3r.py -d example.com -v -o /usr/local/ban.txt -6``
-
-* To enumerate subdomains of a specific domain to ban, show verbosity and exceptions, export and add the ::1 (ipv6) :
-
-``python host3r.py -d example.com -v -e -o /usr/local/ban.txt -6``
+``python host3r.py -d example.com -o /usr/local/ban.txt -6``
 
 
 ## License
