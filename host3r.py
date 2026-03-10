@@ -15,6 +15,7 @@ import sys
 import os
 import argparse
 import time
+import json
 import requests
 if sys.version > '3':
     import urllib.parse as urlparse
@@ -31,9 +32,15 @@ import dns.resolver
 import socket
 from collections import Counter
 if sys.version > '3':
-    from queue import Queue
+    from queue import Empty, Queue
 else:
-    from Queue import Queue
+    from Queue import Empty, Queue
+
+verbose = False
+ipv6 = False
+exception = False
+
+SEPARATOR = "-------------------------------------"
 
 #######################
 # CHECK REQUESTED PACKAGE
@@ -105,20 +112,28 @@ def parser_error(errmsg):
     print ("[!] NOTE : ERROR : " + errmsg + "\n")
     sys.exit()
 
+
+class NewlineHelpAction(argparse._HelpAction):
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.print_help()
+        print ("")
+        parser.exit()
+
 #######################
 # ARGPARSE
 #######################
 
 def parse_args():
     banner()
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(add_help=False)
     parser.error = parser_error
     parser._optionals.title = "[!] NOTE : OPTIONS "
+    parser.add_argument('-h', '--help', action=NewlineHelpAction,
+                        help='show this help message and exit')
     parser.add_argument('-d', '--domain', required=True)
     parser.add_argument('-o', '--output')
-    parser.add_argument('-v', '--verbose', nargs='?', default=False)
-    parser.add_argument('-e', '--exception', nargs='?', default=False)
-    parser.add_argument('-6', '--ipv6', nargs='?', default=False)
+    parser.add_argument('-6', '--ipv6', action='store_true')
     return parser.parse_args()
 #######################
 # WRITE FILE
@@ -126,7 +141,7 @@ def parse_args():
 
 def write_file(filename, subdomains):
     print ("\n[!] NOTE : SAVING RESULT : %s" % (filename))
-    with open(str(filename), 'wb') as f:
+    with open(str(filename), 'w', encoding='utf-8', newline='') as f:
         f.write("#####################################\n#HOST3R\n#####################################\n\n")
         f.write("#BLOCK IPv4 SUBDOMAINS :\n\n")
         for subdomain in subdomains:
@@ -240,7 +255,7 @@ class enumratorBase(object):
 
 class enumratorBaseThreaded(multiprocessing.Process, enumratorBase):
 
-    def __init__(self, base_url, engine_name, domain, subdomains=None, q=None, lock=threading.Lock()):
+    def __init__(self, base_url, engine_name, domain, subdomains=None, q=None, lock=None):
         subdomains = subdomains or []
         enumratorBase.__init__(self, base_url, engine_name, domain, subdomains)
         multiprocessing.Process.__init__(self)
@@ -251,7 +266,7 @@ class enumratorBaseThreaded(multiprocessing.Process, enumratorBase):
     def run(self):
         domain_list = self.enumerate()
         for domain in domain_list:
-            self.q.append(domain)
+            self.q.put(domain)
 
 #######################
 # GOOGLE
@@ -272,6 +287,7 @@ class GoogleEnum(enumratorBaseThreaded):
 
     def extract_domains(self, resp):
         link_regx = re.compile('<cite.*?>(.*?)<\/cite>')
+        links_list = []
         try:
             links_list = link_regx.findall(resp)
             for link in links_list:
@@ -291,6 +307,8 @@ class GoogleEnum(enumratorBaseThreaded):
         return links_list
 
     def check_response_errors(self, resp):
+        if not isinstance(resp, str):
+            return False
         if 'Our systems have detected unusual traffic' in resp:
             if verbose:
                 print ("[!] NOTE : ERROR : GOOGLE BLOCK")
@@ -332,6 +350,7 @@ class YahooEnum(enumratorBaseThreaded):
             '<span class=" fz-15px fw-m fc-12th wr-bw.*?">(.*?)</span>')
         link_regx = re.compile(
             '<span class="txt"><span class=" cite fw-xl fz-15px">(.*?)</span>')
+        links_list = []
         try:
             links = link_regx.findall(resp)
             links2 = link_regx2.findall(resp)
@@ -388,6 +407,7 @@ class AskEnum(enumratorBaseThreaded):
 
     def extract_domains(self, resp):
         link_regx = re.compile('<p class="web-result-url">(.*?)</p>')
+        links_list = []
         try:
             links_list = link_regx.findall(resp)
             for link in links_list:
@@ -437,6 +457,7 @@ class BingEnum(enumratorBaseThreaded):
     def extract_domains(self, resp):
         link_regx = re.compile('<li class="b_algo"><h2><a href="(.*?)"')
         link_regx2 = re.compile('<div class="b_title"><h2><a href="(.*?)"')
+        links_list = []
         try:
             links = link_regx.findall(resp)
             links2 = link_regx2.findall(resp)
@@ -486,6 +507,7 @@ class BaiduEnum(enumratorBaseThreaded):
 
     def extract_domains(self, resp):
         found_newdomain = False
+        links = []
         subdomain_list = []
         link_regx = re.compile('<a.*?class="c-showurl".*?>(.*?)</a>')
         try:
@@ -541,7 +563,7 @@ class BaiduEnum(enumratorBaseThreaded):
 
 class NetcraftEnum(multiprocessing.Process):
 
-    def __init__(self, domain, subdomains=None, q=None, lock=threading.Lock()):
+    def __init__(self, domain, subdomains=None, q=None, lock=None):
         subdomains = subdomains or []
         self.base_url = 'http://searchdns.netcraft.com/?restriction=site+ends+with&host={domain}'
         self.domain = urlparse.urlparse(domain).netloc
@@ -558,7 +580,7 @@ class NetcraftEnum(multiprocessing.Process):
     def run(self):
         domain_list = self.enumerate()
         for domain in domain_list:
-            self.q.append(domain)
+            self.q.put(domain)
         return
 
     def print_banner(self):
@@ -616,10 +638,14 @@ class NetcraftEnum(multiprocessing.Process):
     def enumerate(self):
         start_url = self.base_url.format(domain='example.com')
         resp = self.req(start_url)
+        if resp is None:
+            return self.subdomains
         cookies = self.get_cookies(resp.headers)
         url = self.base_url.format(domain=self.domain)
         while True:
             resp = self.get_response(self.req(url, cookies))
+            if not isinstance(resp, str):
+                return self.subdomains
             self.extract_domains(resp)
             if not 'Next page' in resp:
                 return self.subdomains
@@ -629,6 +655,7 @@ class NetcraftEnum(multiprocessing.Process):
     def extract_domains(self, resp):
         link_regx = re.compile(
             '<a href="https://toolbar.netcraft.com/site_report\?url=(.*)">')
+        links_list = []
         try:
             links_list = link_regx.findall(resp)
             for link in links_list:
@@ -652,7 +679,7 @@ class NetcraftEnum(multiprocessing.Process):
 
 class DNSdumpster(multiprocessing.Process):
 
-    def __init__(self, domain, subdomains=None, q=None, lock=threading.Lock()):
+    def __init__(self, domain, subdomains=None, q=None, lock=None):
         subdomains = subdomains or []
         self.base_url = 'https://dnsdumpster.com/'
         self.domain = urlparse.urlparse(domain).netloc
@@ -662,16 +689,17 @@ class DNSdumpster(multiprocessing.Process):
         self.engine_name = "DNSdumpster"
         multiprocessing.Process.__init__(self)
         self.threads = 70
-        self.lock = threading.BoundedSemaphore(value=self.threads)
+        self.lock = lock
         self.q = q
         self.timeout = 25
         self.print_banner()
         return
 
     def run(self):
+        self.lock = threading.BoundedSemaphore(value=self.threads)
         domain_list = self.enumerate()
         for domain in domain_list:
-            self.q.append(domain)
+            self.q.put(domain)
         return
 
     def print_banner(self):
@@ -773,7 +801,7 @@ class DNSdumpster(multiprocessing.Process):
 
 class Virustotal(multiprocessing.Process):
 
-    def __init__(self, domain, subdomains=None, q=None, lock=threading.Lock()):
+    def __init__(self, domain, subdomains=None, q=None, lock=None):
         subdomains = subdomains or []
         self.base_url = 'https://www.virustotal.com/en/domain/{domain}/information/'
         self.domain = urlparse.urlparse(domain).netloc
@@ -790,7 +818,7 @@ class Virustotal(multiprocessing.Process):
     def run(self):
         domain_list = self.enumerate()
         for domain in domain_list:
-            self.q.append(domain)
+            self.q.put(domain)
         return
 
     def print_banner(self):
@@ -851,7 +879,7 @@ class Virustotal(multiprocessing.Process):
 
 class ThreatCrowd(multiprocessing.Process):
 
-    def __init__(self, domain, subdomains=None, q=None, lock=threading.Lock()):
+    def __init__(self, domain, subdomains=None, q=None, lock=None):
         subdomains = subdomains or []
         self.base_url = 'https://www.threatcrowd.org/searchApi/v2/domain/report/?domain={domain}'
         self.domain = urlparse.urlparse(domain).netloc
@@ -868,7 +896,7 @@ class ThreatCrowd(multiprocessing.Process):
     def run(self):
         domain_list = self.enumerate()
         for domain in domain_list:
-            self.q.append(domain)
+            self.q.put(domain)
         return
 
     def print_banner(self):
@@ -934,9 +962,9 @@ class ThreatCrowd(multiprocessing.Process):
 
 class CrtSearch(multiprocessing.Process):
 
-    def __init__(self, domain, subdomains=None, q=None, lock=threading.Lock()):
+    def __init__(self, domain, subdomains=None, q=None, lock=None):
         subdomains = subdomains or []
-        self.base_url = 'https://crt.sh/?q=%25.{domain}'
+        self.base_url = 'https://crt.sh/?q=%25.{domain}&output=json'
         self.domain = urlparse.urlparse(domain).netloc
         self.subdomains = []
         self.session = requests.Session()
@@ -951,7 +979,7 @@ class CrtSearch(multiprocessing.Process):
     def run(self):
         domain_list = self.enumerate()
         for domain in domain_list:
-            self.q.append(domain)
+            self.q.put(domain)
         return
 
     def print_banner(self):
@@ -961,7 +989,7 @@ class CrtSearch(multiprocessing.Process):
     def req(self, url):
         headers = {
             'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:38.0) Gecko/20100101 Firefox/40.0',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept': 'application/json,text/plain,*/*;q=0.8',
             'Accept-Language': 'en-GB,en;q=0.5',
             'Accept-Encoding': 'gzip, deflate',
         }
@@ -989,17 +1017,18 @@ class CrtSearch(multiprocessing.Process):
         return self.subdomains
 
     def extract_domains(self, resp):
-        link_regx = re.compile('<TD>(.*?)</TD>')
         try:
-            links = link_regx.findall(resp)
+            links = json.loads(resp)
             for link in links:
-                subdomain = link.strip()
-                if not subdomain.endswith(self.domain) or '*' in subdomain:
-                    continue
-                if subdomain not in self.subdomains and subdomain != self.domain:
-                    if verbose:
-                        print ("[-] DIGGING : %s : %s" % (self.engine_name, subdomain))
-                    self.subdomains.append(subdomain.strip())
+                name_value = link.get('name_value', '')
+                for subdomain in name_value.splitlines():
+                    subdomain = subdomain.strip().lstrip('*.')
+                    if not subdomain.endswith(self.domain):
+                        continue
+                    if subdomain not in self.subdomains and subdomain != self.domain:
+                        if verbose:
+                            print ("[-] DIGGING : %s : %s" % (self.engine_name, subdomain))
+                        self.subdomains.append(subdomain.strip())
         except Exception as e:
             if exception:
                 print ("[!] NOTE : ERROR : %s" % (self.engine_name))
@@ -1011,7 +1040,7 @@ class CrtSearch(multiprocessing.Process):
 
 class PassiveDNS(multiprocessing.Process):
 
-    def __init__(self, domain, subdomains=None, q=None, lock=threading.Lock()):
+    def __init__(self, domain, subdomains=None, q=None, lock=None):
         subdomains = subdomains or []
         self.base_url = 'http://ptrarchive.com/tools/search.htm?label={domain}'
         self.domain = urlparse.urlparse(domain).netloc
@@ -1028,7 +1057,7 @@ class PassiveDNS(multiprocessing.Process):
     def run(self):
         domain_list = self.enumerate()
         for domain in domain_list:
-            self.q.append(domain)
+            self.q.put(domain)
         return
 
     def print_banner(self):
@@ -1088,80 +1117,73 @@ class PassiveDNS(multiprocessing.Process):
 
 def main():
     args = parse_args()
-    domain = args.domain
+    domain = args.domain.strip()
     savefile = args.output
     google_list = []
     bing_list = []
     baidu_list = []
     search_list = set()
-    if is_windows:
-        subdomains_queue = list()
-    else:
-        subdomains_queue = multiprocessing.Manager().list()
+    subdomains_queue = multiprocessing.Queue()
 
 #######################
 # PARAMETERS
 #######################
 
-    global verbose, ipv6, exception
-    exception = args.exception
+    global ipv6
     ipv6 = args.ipv6
-    verbose = args.verbose
-    if verbose or verbose is None:
-        verbose = True
-    if ipv6 or ipv6 is None:
-        ipv6 = True
-    if exception or exception is None:
-        exception = True
 
 #######################
 # DOMAIN CHECK
 #######################
 
+    if not re.match(r'^[a-z]+://', domain, re.IGNORECASE):
+        domain = 'http://' + domain
+    parsed_domain = urlparse.urlparse(domain)
+    normalized_domain = parsed_domain.netloc or parsed_domain.path
     domain_check = re.compile(
-        "^(http|https)?[a-zA-Z0-9]+([\-\.]{1}[a-zA-Z0-9]+)*\.[a-zA-Z]{2,}$")
-    if not domain_check.match(domain):
+        r"^[a-zA-Z0-9]+([\-\.]{1}[a-zA-Z0-9]+)*\.[a-zA-Z]{2,}$")
+    if not domain_check.match(normalized_domain):
         print ("\n[!] NOTE : ERROR : ENTER A VALID DOMAIN\n")
         sys.exit()
-    if not domain.startswith('http://') or not domain.startswith('https://'):
-        domain = 'http://' + domain
+    domain = '{scheme}://{netloc}'.format(
+        scheme=parsed_domain.scheme or 'http',
+        netloc=normalized_domain)
 
 #######################
 # BANNER
 #######################
 
-    banner()
     parsed_domain = urlparse.urlparse(domain)
-    print ("#####################################\n")
+    print (SEPARATOR)
     print ("[!] NOTE : ENUMERATING SUBDOMAINS TO ADD FOR : %s" % parsed_domain.netloc)
-    print ("\n#####################################\n")
-    if verbose:
-        print ("[!] NOTE : VERBOSITY ACTIVATED")
+    print (SEPARATOR)
     if ipv6:
         print ("[!] NOTE : IPV6 TO HOST ACTIVATED")
-    if exception:
-        print ("[!] NOTE : EXCEPTIONS NOTICES ACTIVATED")
 
 #######################
 # ENGINE ENUMERATION
 #######################
 
-    enums = [enum(domain, verbose, q=subdomains_queue) for enum in (BaiduEnum, YahooEnum, GoogleEnum, BingEnum,AskEnum, NetcraftEnum, Virustotal, ThreatCrowd, CrtSearch, PassiveDNS)]
-    #enums = [enum(domain, verbose, q=subdomains_queue) for enum in (BaiduEnum, YahooEnum, GoogleEnum, BingEnum,AskEnum, NetcraftEnum, DNSdumpster, Virustotal, ThreatCrowd, CrtSearch, PassiveDNS)]
+    enums = [enum(domain, q=subdomains_queue) for enum in (BaiduEnum, YahooEnum, GoogleEnum, BingEnum,AskEnum, NetcraftEnum, Virustotal, ThreatCrowd, CrtSearch, PassiveDNS)]
+    #enums = [enum(domain, q=subdomains_queue) for enum in (BaiduEnum, YahooEnum, GoogleEnum, BingEnum,AskEnum, NetcraftEnum, DNSdumpster, Virustotal, ThreatCrowd, CrtSearch, PassiveDNS)]
 
     for enum in enums:
         enum.start()
     for enum in enums:
         enum.join()
-    subdomains = set(subdomains_queue)
+    subdomains = set()
+    while True:
+        try:
+            subdomains.add(subdomains_queue.get_nowait())
+        except Empty:
+            break
     for subdomain in subdomains:
         search_list.add(subdomain)
     if subdomains:
         subdomains = sorted(subdomains)
-        print ("\n#####################################\n")
+        print ("\n" + SEPARATOR)
         print ("[!] NOTE : SUBDOMAINS LIST : %s TO ADD " % len(subdomains))
-        print ("\n#####################################\n")
-        print ("#####################################\n#HOST3R\n#####################################\n")
+        print (SEPARATOR)
         print ("#BLOCK IPv4 SUBDOMAINS : %s\n" % parsed_domain.netloc)
         for subdomain in subdomains:
             print ("127.0.0.1  " + subdomain)
@@ -1171,7 +1193,8 @@ def main():
                 print ("::1  " + subdomain)
         if savefile:
             write_file(savefile, subdomains)
-        print ("\n#####################################\n")
+        print ("\n" + SEPARATOR)
+    print ("")
 
 if __name__ == "__main__":
     main()
