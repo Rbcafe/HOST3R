@@ -1,0 +1,6 @@
+repos:
+  - repo: https://github.com/pypa/pip-audit
+    rev: v2.10.0
+    hooks:
+      - id: pip-audit
+        args: [-r, install/requirements.lock, --no-deps]
